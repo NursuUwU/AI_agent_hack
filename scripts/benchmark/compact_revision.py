@@ -41,6 +41,15 @@ TASK = """Продолжи учебный проект для директора
 Выполни отдельные проверки по четырём ролям из пакета, запиши их одним pf_publish.
 """
 
+STRUCTURED_TASK = """После save_director_answer вызови pf_foundations. Передай rows_json как JSON-массив.
+Поля каждой строки: conclusion, refs (массив действующих ID C или открытых G), counter и revisit.
+Таблица появляется в сохранённом итоге. После успешной сборки выполни pf_publish.
+Пакет может содержать выдержки. Если не хватает прежнего значения, оговорки или условий, прочитай
+источник через pf с args ["source", "read", "--id", "S001"] и нужным ID. Команда чтения решения —
+args ["decision", "show", "--id", "D001"]. Для counter используй проверку из пакета.
+Сохрани ограничения исходных данных.
+"""
+
 
 def replay(work, source, env):
     items = [e["item"] for e in event_records(source / "initial.events.jsonl")
@@ -61,7 +70,7 @@ def normalized_report(path):
     return re.sub(r"(?m)^_Сформировано .+_\r?\n", "", path.read_text(encoding="utf-8")).strip()
 
 
-def benchmark_case(codex, root, previous, case, timeout, prepare_only):
+def benchmark_case(codex, root, previous, case, timeout, prepare_only, structured):
     archived = previous / f"{case}.{MODEL}.pf"
     historical = root / f"{case}.{MODEL}.current"
     historical.mkdir()
@@ -93,16 +102,21 @@ def benchmark_case(codex, root, previous, case, timeout, prepare_only):
         new_ids = {row["id"] for row in event_records(ledger)} - before
         if len(new_ids) != 1:
             raise ValueError(f"{case}: expected one new source")
+        packet_args = pf + ["revision-packet", "--id", "D001", "--source", new_ids.pop(), "--review-rules"]
         packet = subprocess.run(
-            pf + ["revision-packet", "--id", "D001", "--source", new_ids.pop(), "--review-rules"],
+            packet_args + (["--compact"] if structured else []),
             cwd=work, env=env, encoding="utf-8", capture_output=True, check=True,
         ).stdout
         (out / "packet.md").write_text(packet, encoding="utf-8")
         prep = round(time.monotonic() - started, 2)
+        if structured and prepare_only:
+            full = subprocess.run(packet_args, cwd=work, env=env, encoding="utf-8", capture_output=True,
+                                  check=True).stdout
+            write_json(out / "packet.metrics.json", {"full_chars": len(full), "compact_chars": len(packet)})
         if prepare_only:
             return []
         revision = phase(codex, work, out, env, MODEL, "pf", case, "revision", "", timeout,
-                         prompt_override=TASK + "\n\n" + packet)
+                         prompt_override=TASK + (STRUCTURED_TASK if structured else "") + "\n\n" + packet)
         revision["preparation_seconds"] = prep
         revision["seconds"] = round(revision["seconds"] + prep, 2)
         write_json(out / "revision.metrics.json", revision)
@@ -118,6 +132,7 @@ def main():
     parser.add_argument("--case", choices=PILOT_CASES, action="append")
     parser.add_argument("--timeout", type=int, default=300)
     parser.add_argument("--prepare-only", action="store_true")
+    parser.add_argument("--structured", action="store_true", help="use bounded packets and generate the table")
     opts = parser.parse_args()
     out, previous = opts.out.resolve(), opts.previous.resolve()
     info = json.loads((previous / "experiment.json").read_text(encoding="utf-8"))
@@ -131,9 +146,11 @@ def main():
         parser.error("Codex CLI must be on PATH")
     out.mkdir(parents=True, exist_ok=False)
     write_json(out / "experiment.json", dict(evaluation_artifact="released_report",
-               input_sha256=inputs, model=MODEL, effort="low", baseline=str(previous), phase="revision"))
+               input_sha256=inputs, model=MODEL, effort="low", baseline=str(previous),
+               phase="revision", structured=opts.structured))
     with ThreadPoolExecutor(max_workers=len(cases)) as pool:
-        jobs = [pool.submit(benchmark_case, codex, out, previous, case, opts.timeout, opts.prepare_only)
+        jobs = [pool.submit(benchmark_case, codex, out, previous, case, opts.timeout,
+                            opts.prepare_only, opts.structured)
                 for case in cases]
         results = [row for job in jobs for row in job.result()]
     if not opts.prepare_only:

@@ -65,7 +65,8 @@ TOOLS = {
                      {"text": S, "kind": enum("fact", "hypothesis", "forecast", "assumption",
                                               "synthetic"),
                       "src": S, "derived": S, "loc": S, "quote": S,
-                      "conf": enum("low", "medium", "high"), "q": S, "tags": S},
+                      "conf": enum("low", "medium", "high"), "q": S, "tags": S,
+                      "evidence_role": enum("support", "counter")},
                      ["text", "kind"]),
     "pf_claim_list": ("Реестр утверждений: ID, тип, уверенность, источники.",
                       ["claim", "list"], [], {"kind": S, "all": B}, []),
@@ -82,9 +83,20 @@ TOOLS = {
                         ["question", "add"], ["text"], {"text": S, "why": S}, ["text"]),
     "pf_focus": ("Проверить покрытие вопросов и пробелы перед следующим поиском. q — ID вопросов через запятую.",
                  ["focus"], [], {"q": S}, []),
-    "pf_revision_packet": ("Получить пакет для пересмотра пилота после ingest: решение, основания, прежний текст, "
+    "pf_research_evidence": ("Проверить кандидатов в факты по одному вопросу или извлечь их через Codex CLI. "
+                            "Без json и extract возвращает запрос для текущей модели. Реестр не меняется.",
+                            ["research-evidence"], [], {"q": S, "source": S, "position": S, "json": S, "extract": B},
+                            ["q", "source"]),
+    "pf_revision_packet": ("Получить пакет для пересмотра решения после ingest: решение, основания, прежний текст, "
                            "новые снимки и при необходимости правила сверки.",
-                           ["revision-packet"], [], {"id": S, "source": S, "review_rules": B}, ["id", "source"]),
+                           ["revision-packet"], [], {"id": S, "source": S, "review_rules": B, "compact": B},
+                           ["id", "source"]),
+    "pf_foundations": ("Собрать таблицу сверки из JSON. Каждая строка содержит conclusion, refs, counter и revisit. "
+                       "target обновляет таблицу в существующем Markdown. После изменения выполните сверку выпуска.",
+                       ["foundations"], [], {"json": S, "target": S}, ["json"]),
+    "pf_revision_card": ("Показать PM, что затронули новые источники и записаны ли новые основания. "
+                         "Требуются ID решения и зарегистрированных снимков.",
+                         ["revision-card"], [], {"id": S, "source": S}, ["id", "source"]),
     "pf_verdict_add": ("Записать независимую проверку документа с отпечатком его версии. "
                        "Проверку ведёт отдельный проход/субагент, не автор документа.",
                        ["verdict", "add"], [],

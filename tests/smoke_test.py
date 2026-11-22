@@ -313,6 +313,64 @@ class PfSmoke(unittest.TestCase):
         r = self.pf("hook", "stop", stdin=json.dumps({"stop_hook_active": True}))
         self.assertEqual(r.returncode, 0, "повторная блокировка привела бы к зацикливанию")
 
+    def test_revision_card_tracks_review_without_changing_the_decision(self):
+        def add_fact(text, source):
+            self.pf("claim", "add", text, "--kind", "fact", "--src", source, "--quote", text)
+
+        trigger = "Отложить тест при оттоке v2 от 60 тыс. за август."
+        first = "Отток v2 за август составил 52 тыс. подписок."
+        add_fact(first, self.add_source(first))
+        self.pf("decision", "add", "--title", "Готовить пилот", "--basis", "C001", "--trigger", trigger)
+        self.write_doc("summary.md", "## Что говорить клиентам\nСверяем условие пилота [C001].\n")
+        stable = "Отток v2 за август составил 54 тыс. подписок."
+        stable_source = self.add_source(stable)
+        add_fact(stable, stable_source)
+        card = ("revision-card", "--id", "D001", "--source")
+        packet = self.pf("revision-packet", "--id", "D001", "--source", stable_source).stdout
+        self.assertIn(trigger, packet)
+        self.assertIn(stable, packet)
+        self.write_doc("summary.md", "## Что говорить клиентам\nСверяем условие пилота [C001].\n"
+                       + "Служебная заметка к отчёту.\n" * 250)
+        compact = self.pf("revision-packet", "--id", "D001", "--source", stable_source, "--compact").stdout
+        self.assertIn(trigger, compact)
+        self.assertIn(first, compact)
+        self.assertIn(stable, compact)
+        self.assertLess(len(compact), len(self.pf("revision-packet", "--id", "D001", "--source", stable_source).stdout))
+        self.pf("claim", "retract", "C001", "--by", "C002", "--reason", "Исправлена выгрузка")
+        pending = self.pf(*card, stable_source).stdout
+        self.assertIn("Нужен пересмотр", pending)
+        self.assertIn("Что говорить клиентам", pending)
+        self.pf("decision", "edit", "--id", "D001", "--basis", "C002", "--note", "PM сохраняет подготовку")
+        unchanged = self.pf(*card, stable_source).stdout
+        self.assertIn("Формулировка решения сохранилась", unchanged)
+        self.assertIn(stable, unchanged)
+
+        disputed = "Отток v2 за август составил 61 тыс. подписок."
+        alternate = "Отток v2 за август составил 59 тыс. подписок."
+        conflict_source = self.add_source(f"{disputed}\n{alternate}")
+        add_fact(disputed, conflict_source)
+        add_fact(alternate, conflict_source)
+        ledger = self.proj / "decisions" / "decisions.jsonl"
+        before = ledger.read_bytes()
+        blocked = self.pf(*card, conflict_source).stdout
+        self.assertIn("Нужна сверка с PM", blocked)
+        self.assertIn(disputed, blocked)
+        self.assertIn(alternate, blocked)
+        self.assertEqual(ledger.read_bytes(), before)
+
+        verified_source = self.add_source(f"Подтверждение аналитика. {disputed}")
+        add_fact(disputed, verified_source)
+        for obsolete in ("C002", "C003", "C004"):
+            self.pf("claim", "retract", obsolete, "--by", "C005", "--reason", "Сверено с биллингом")
+        self.pf("decision", "edit", "--id", "D001", "--title", "Отложить пилот", "--basis", "C005",
+                "--note", "PM подтвердил отсрочку")
+        changed = self.pf(*card, verified_source).stdout
+        self.assertIn("Новые основания записаны", changed)
+        self.assertIn("До поправки — Готовить пилот", changed)
+        self.assertIn("Действующее решение — Отложить пилот", changed)
+        self.assertIn(f"[C005] [{verified_source}]", changed)
+        self.assertIn(disputed, changed)
+
     def test_impact_and_review_follow_retraction(self):
         sid = self.add_source()
         self.pf("claim", "add", "Выручка 2025 — 10 млн руб.", "--kind", "fact", "--src", sid)
@@ -474,6 +532,30 @@ class PfSmoke(unittest.TestCase):
         self.assertNotIn("Q002", out)
         self.assertNotIn("G002", out)
 
+    def test_research_evidence_checks_candidates_and_marks_competing_signals(self):
+        self.pf("question", "add", "Выручка выросла?", "--why", "Влияет на решение о пилоте")
+        yes = "В июне 2025 года выручка выросла на 10 млн руб."
+        no = "В июне 2025 года выручка снизилась на 15 млн руб."
+        s1, s2 = self.add_source(yes), self.add_source(no)
+        prototype = {"source": s1, "text": yes, "quote": yes, "period": "в июне 2025 года",
+                     "unit": "млн руб.", "role": "support"}
+        counter = {**prototype, "source": s2, "text": no, "quote": no, "role": "counter"}
+        wrong = {**prototype, "text": yes.replace("10", "80")}
+        args = ("research-evidence", "--q", "Q001", "--source", f"{s1},{s2}", "--json", "-")
+        result = self.pf(*args, stdin=json.dumps({"candidates": [prototype, counter, wrong]})).stdout
+        result = json.loads(result)
+        self.assertEqual([row["role"] for row in result["candidates"]], ["support", "counter"])
+        self.assertIn("есть подтверждение и контрдоказательство", result["review_reasons"])
+        self.assertIn("сверки цифр", result["issues"][0])
+        self.assertEqual(result["model_calls"], [])
+        self.assertFalse((self.proj / "evidence" / "claims.jsonl").exists())
+        for row in (prototype, counter):
+            self.pf("claim", "add", row["text"], "--kind", "fact", "--src", row["source"],
+                    "--quote", row["quote"], "--q", "Q001", "--evidence-role", row["role"])
+        coverage = self.pf("focus", "--q", "Q001").stdout
+        self.assertIn("Подтверждение: C001", coverage)
+        self.assertIn("Контрдоказательство: C002", coverage)
+
     def test_release_checks_decision_foundation_table(self):
         self.pf("gap", "add", "Нужны техкарты", "--why", "Нет себестоимости")
         table = ("## Сверка оснований рекомендации\n\n"
@@ -489,6 +571,23 @@ class PfSmoke(unittest.TestCase):
                        "| Пилот условный | [G001] | Расчёт по техкартам | Вклад ≤ 0 → откладываем пилот |\n")
         self.pf("check", "--release", "--strict")
         self.pf("stage", "choice", "--next", "Выбор PM")
+        row = {"conclusion": "Сравнить два варианта | A и B", "refs": ["G001"],
+               "counter": "Расчёт по техкартам", "revisit": "Вклад ≤ 0 → откладываем пилот"}
+        target = self.proj / "deliverables" / "foundations.md"
+        before = target.read_bytes()
+        args = ("foundations", "--target", "deliverables/foundations.md")
+        bad = self.pf(*args, stdin=json.dumps([row, {**row, "refs": ["G999"]}]), ok=False)
+        self.assertNotEqual(bad.returncode, 0)
+        self.assertIn("G999", bad.stderr)
+        self.assertEqual(target.read_bytes(), before)
+        self.pf(*args, stdin=json.dumps([row]))
+        text = target.read_text(encoding="utf-8")
+        self.assertIn(r"Сравнить два варианта \| A и B", text)
+        self.assertEqual(text.count("## Сверка оснований рекомендации"), 1)
+        rendered = runpy.run_path(str(PF))["md_to_html"](text, "Сверка")
+        self.assertEqual(rendered.count("<td>"), 4)
+        self.assertIn("Сравнить два варианта | A и B", rendered)
+        self.pf("check", "--release", "--strict")
 
     def test_batch_with_fetch_does_not_deadlock(self):
         page = Path(self.tmp.name) / "page.html"

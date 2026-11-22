@@ -37,6 +37,9 @@ PF_TOOLS = [
          "impact, verdict, check. save_director_answer также пишет deliverables/summary.md.", args=ARGS),
     tool("pf_batch", "Несколько команд pf. Каждая команда — массив аргументов.",
          commands={"type": "array", "items": ARGS}),
+    tool("pf_foundations", "После сохранения итога собери таблицу оснований, передав строки с полями "
+         "conclusion, refs (массив ID), counter и revisit. rows_json — JSON-массив.",
+         rows_json=STRING),
     tool("pilot_economics", "Экономика ценового пилота подписки из tools/pilot_economics.py. "
          "Вызови с [\"--help\"] для аргументов.", args=ARGS),
     tool("guide", "Читать Markdown с методикой, шаблоном, skill или ролью. Путь от корня: "
@@ -134,6 +137,8 @@ def call(work, arm, phase, name, args):
         for role in ("red_team", "judge", "counter", "fidelity"):
             command.extend(["--review", role.replace("_", "-"), args[role]])
         return execute(work, "pf.py", command)
+    if name == "pf_foundations":
+        return execute(work, "pf.py", ["foundations", "--target", SUMMARY], args["rows_json"])
     if name == "pf":
         validate_command(args["args"], phase)
         return execute(work, "pf.py", args["args"])

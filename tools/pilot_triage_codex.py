@@ -1,12 +1,12 @@
 """Turn one correction file into a checked preview with one Codex extraction call."""
 
-import json
 from pathlib import Path
 import re
 import subprocess
 import sys
-import tempfile
 import time
+
+from structured_codex import run_json
 
 
 FIELDS = {"status": {"type": "string", "enum": ["ready", "review"]},
@@ -33,26 +33,8 @@ def triage(pf, codex, workspace, env, decision_id, source_file, model, timeout=9
     if prompt.returncode:
         raise ValueError(prompt.stderr.strip() or prompt.stdout.strip())
 
-    with tempfile.TemporaryDirectory(prefix="pf-extract-") as local:
-        work = Path(local)
-        answer = work / "extraction.json"
-        schema = work / "schema.json"
-        schema.write_text(json.dumps({"type": "object", "properties": FIELDS, "required": list(FIELDS),
-                                      "additionalProperties": False}), encoding="utf-8")
-        args = [codex, "exec", "--skip-git-repo-check", "--ephemeral", "--ignore-user-config",
-                "--sandbox", "read-only", "--json", "--model", model, "-c", 'model_reasoning_effort="low"',
-                "-c", 'web_search="disabled"', "-c", 'approval_policy="never"', "-c", "project_doc_max_bytes=0",
-                "--output-schema", str(schema), "--output-last-message", str(answer), "-"]
-        run = subprocess.run(args, input=prompt.stdout, cwd=work, env=env, encoding="utf-8",
-                             capture_output=True, timeout=timeout)
-        events = [json.loads(line) for line in run.stdout.splitlines() if line.strip()]
-        if run.returncode or not answer.is_file():
-            error = next((line.get("message") for line in reversed(events) if line.get("type") == "error"), None)
-            raise ValueError(error or run.stderr.strip() or "Codex не сохранил извлечение")
-        proposal = answer.read_text(encoding="utf-8").strip()
-        if proposal.startswith('```json\n') and proposal.endswith('```'):
-            proposal = proposal[len('```json\n'):-3].strip()
-    usage = next((e["usage"] for e in reversed(events) if e["type"] == "turn.completed"), {})
+    schema = {"type": "object", "properties": FIELDS, "required": list(FIELDS), "additionalProperties": False}
+    proposal, usage = run_json(codex, model, prompt.stdout, schema, env, timeout)
     result = project_command(cmd + ["--proposal", "-"], input=proposal)
     return (result.stdout, result.stderr, result.returncode,
             {"seconds": round(time.monotonic() - started, 2), "model": model, "model_calls": 1,

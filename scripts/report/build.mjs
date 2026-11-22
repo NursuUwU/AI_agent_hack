@@ -4,7 +4,7 @@
 //   node build.mjs   → docs/submission/report.pdf (+ report.html рядом с исходником — для просмотра в браузере)
 //
 // Markdown — небольшое подмножество: # ## ###, абзацы, списки (вложенные — отступ 2 пробела), > цитаты, таблицы,
-// ``` код, --- разрыв страницы (разделы ## и так начинаются с новой), строка <div …> — HTML как есть, ![подпись](путь) — рисунок, ::: gallery N / ::: note / ::: todo / ::: prompt … ::: — блоки.
+// ``` код, --- разрыв страницы, строка <div …> — HTML как есть, ![подпись](путь) — рисунок, ::: gallery N / ::: note / ::: todo / ::: prompt … ::: — блоки.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -149,7 +149,8 @@ const css = `
 html { font-family: Onest, sans-serif; color: var(--ink); font-size: 10.2pt; line-height: 1.5; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 body { margin: 0; }
 h1 { font-size: 30pt; line-height: 1.08; color: var(--ink); margin: 0 0 8mm; font-weight: 600; letter-spacing: -0.01em; }
-h2 { font-size: 19pt; line-height: 1.15; color: var(--brand); margin: 0 0 5mm; font-weight: 600; break-before: page; break-after: avoid; }
+h2 { font-size: 19pt; line-height: 1.15; color: var(--brand); margin: 6mm 0 5mm; font-weight: 600; break-after: avoid; }
+#demo { break-before: page; margin-top: 0; }
 h3 { font-size: 12.5pt; margin: 6mm 0 2.5mm; font-weight: 600; break-after: avoid; }
 p { margin: 0 0 3mm; orphans: 3; widows: 3; }
 a { color: var(--brand); text-decoration: none; }
